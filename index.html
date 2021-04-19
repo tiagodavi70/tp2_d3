@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title> Trabalho Prático 2</title>
+        <style rel="stylesheet">
+            
+        </style>
+        <script src="https://d3js.org/d3.v6.min.js"></script>
+    </head>
+
+    <body>
+
+    </body>
+
+    <script>
+        // Carrega tudo ao mesmo tempo, e espera todos estarem prontos
+        Promise.all([d3.json("./map.json"), d3.json("./data.json")]).then( results => {
+            console.log(results);
+        });
+
+        // Carrega um de cada vez
+        let geomap = {};
+        d3.json("./map.json").then( resultMap => {
+            geomap = resultMap;
+            return d3.json("./data.json")
+        }).then(data => {
+            d3.select("body").text("Data and map loaded");
+            console.log([geomap, data]);
+        })
+    </script>
+</html>
