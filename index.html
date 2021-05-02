@@ -1,31 +1,510 @@
 <!DOCTYPE html>
 <html>
     <head>
-        <title> Trabalho Prático 2</title>
+        <title>Trabalho Prático 2</title>
         <style rel="stylesheet">
-            
+            .container {
+                display: flex;
+            }
+
+            .container-item {
+                margin: 20px;
+            }
+
+            .vis {
+                border: 1px solid black;
+            }
         </style>
         <script src="https://d3js.org/d3.v6.min.js"></script>
     </head>
 
     <body>
+        <!-- 
+            Questões:
+            1 - A situação atual do convênio tem relação com a duração ou localidade do mesmo?
+            2 - Quais padrões de objetos de convênio são mais comuns? Existe relação entre os entes dos convênios?
+            3 - Os valores de convênio apresentam algum padrão? 
+        -->
+
+        <div> Convênios do Ministério do Turismo</div>
+        <div class="container">
+            <div class="container-item">
+                <div id="map" class="vis"></div>
+                <div id="tipos" class="vis"></div>
+                <div id="objeto" class="vis">
+
+                </div>
+            </div>
+            <!-- <canvas id="myCanvas" width="500", height="500"></canvas> -->
+
+            <div class="container-item">
+                <div id="situacao" class="vis"></div>
+                <div id="valor" class="vis"></div>
+            </div>
+        </div>
 
     </body>
 
     <script>
+
+        let settings = {};
+        let dataGlobal = {}, geoData = {};
+        let vis = {};
+
         // Carrega tudo ao mesmo tempo, e espera todos estarem prontos
-        Promise.all([d3.json("./map.json"), d3.json("./data.json")]).then( results => {
-            console.log(results);
+        Promise.all([d3.json("./brasil.geo.json"),
+                     d3.dsv(";", "./turismo_bruto.csv", preprocess)])
+        .then( results => {
+            
+            let mapData = results[0],
+                data = results[1];
+
+            geoData = mapData;
+            dataGlobal = data;
+
+            let margin = 5,
+                width = 540 - margin,
+                height = 380 - margin;
+
+            let svgMap = d3.select("#map")
+                .append("svg")
+                    .attr("width", width + margin)
+                    .attr("height", height + margin)
+                    .attr('id', 'svgMap');
+            
+            let svgTipos = d3.select("#tipos")
+                .append("svg")
+                    .attr("width", width + margin)
+                    .attr("height", height*.25 + margin)
+                    .attr('class', 'tiposConvenio');
+
+            let svgSituacao = d3.select("#situacao")
+                .append("svg")
+                    .attr("width", width*1.6 + margin)
+                    .attr("height", height + margin)
+                    .attr('class', 'situacaoConvenio');
+
+            let svgValor = d3.select("#valor")
+                .append("svg")
+                    .attr("width", width*1.6 + margin)
+                    .attr("height", height*.7 + margin)
+                    .attr('class', 'valorConvenio');
+
+            settings.map = { 
+                "svg": svgMap,
+                "width": svgMap.attr("width"),
+                "height": svgMap.attr("height"),
+                "column": "UF",
+                "filter": () => filterData(data)
+            }
+
+            settings.tipos = {
+                "svg": svgTipos,  
+                "title": "Tipos",
+                "width": svgTipos.attr("width"),
+                "height": svgTipos.attr("height"),
+                "orientation": "horizontal",
+                "column": "Tipo Ente Convenente",
+                "margin": {"left": 60, "top": 20, "right":20, "bottom":20}
+            }
+            
+            settings.situacao = {
+                "svg": svgSituacao,
+                "title": "Situacao",
+                "width": svgSituacao.attr("width"),
+                "height": svgSituacao.attr("height"),
+                "orientation": "horizontal",
+                "column": "Situação Convênio",
+                "margin": {"left": 230, "top":20, "right":20, "bottom":20}
+            }
+
+            settings.valor = {
+                "svg": svgValor,
+                "title": "Valor",
+                "width": svgValor.attr("width"),
+                "height": svgValor.attr("height"),
+                "orientation": "vertical",
+                "margin": {"left":50, "top":20, "right":20, "bottom":20}
+            }
+
+            data.thr = d3.bin()(data.map(d => d["Valor Convênio"])).map(d=> d.x0)
+            generateVis(settings, data, mapData);
         });
 
-        // Carrega um de cada vez
-        let geomap = {};
-        d3.json("./map.json").then( resultMap => {
-            geomap = resultMap;
-            return d3.json("./data.json")
-        }).then(data => {
-            d3.select("body").text("Data and map loaded");
-            console.log([geomap, data]);
-        })
+        let parseReal = d => +d.split(",")[0].replaceAll(".","").replaceAll("R$ ", "");
+        let parseDate = d => d3.timeParse("%d/%m/%Y")(d);
+
+        function preprocess(d) {
+            let p = {"Ano": new Date(d["Ano"]),
+                "Data Fim Vigência": parseDate(d["Data Fim Vigência"]),
+                "Data Início Vigência": parseDate(d["Data Início Vigência"]),
+                "Data Publicação": parseDate(d["Data Publicação"]),
+                "Vigência Total": d3.timeMonths(parseDate(d["Data Início Vigência"]), parseDate(d["Data Fim Vigência"])).length,
+
+                "Nome Concedente": d["Nome Concedente"],
+                "Nome Convenente": d["Nome Convenente"],
+                "Nº Convênio": d["Nº Convênio"],
+                "Objeto Convênio": d["Objeto Convênio"],
+                "Situação Convênio": d["Situação Convênio"],
+                "Tipo Ente Convenente": d["Tipo Ente Convenente"],
+                "UF": d["UF"],
+
+                "Valor Contrapartida": parseReal(d["Valor Contrapartida"]),
+                "Valor Convênio": parseReal(d["Valor Convênio"]),
+                "Valor Liberado": parseReal(d["Valor Liberado"]),
+                "Valor Última Liberação": parseReal(d["Valor Última Liberação"])
+            };
+            return p;
+        }
+
+        function filterData(dataFull) {
+
+            let data = dataFull;
+            for ( let selection of [vis.map] ) {
+                if (selection.filterColumn != "") {
+                    let categorySelected = selection.data().find(d => d.selected)
+                    categorySelected =  categorySelected.properties ? 
+                        categorySelected["properties"]["UF_05"]: categorySelected["y"];  //[selection.filterColumn]
+                    
+                    data = data.filter(d => d[selection.filterColumn] == categorySelected)
+                }
+            }
+            
+            data.thr = dataFull.thr;
+            let d = generateData(data);
+
+            // let dataMedia = generateData(dataFull)[0];
+            let dataTipos = d[1], dataSituacao = d[2], dataValor = d[3];
+            // let color = d3.scaleLinear()
+            //     .range(["white", "DarkGreen"])
+            //     .domain(d3.extent(dataMedia, d => +d.value))
+
+            // let color_acc = d => color(dataMedia.find(u => u.UF === d.properties["UF_05"])["value"]);
+            // vis.map.attr("fill", color_acc);
+
+            vis.barsTipos.updateVis(dataTipos);
+            vis.barsSituacao.updateVis(dataSituacao);
+            vis.barsValor.updateVis(dataValor);
+        }
+
+        function generateData(data){
+            let dataMedia = Array.from(d3.rollup(data, 
+                leaves => d3.mean(leaves, l => l["Vigência Total"]),
+                d => d["UF"]
+            )).map(d => ({
+                "value": d[1], // Média da vigência total
+                "UF":d[0] // Estado
+            }));
+
+            let dataTipos = Array.from(d3.rollup(data, 
+                leaves => leaves.length,
+                d => d["Tipo Ente Convenente"])
+            ).map(d => ({
+                "x": d[1], // Contagem
+                "y":d[0] // Tipo de Ente
+            }));
+
+            let dataSituacao = Array.from(d3.rollup(data, 
+                leaves => d3.mean(leaves, l => l["Vigência Total"]),
+                d => d["Situação Convênio"])
+            ).map(d => ({
+                "x": d[1], // Média da vigência total
+                "y": d[0] // Tipo de Ente
+            }));
+
+            let dataValor = d3.bin().thresholds(data.thr)(data.map(d => d["Valor Convênio"])).map(
+                d => ({
+                    "x": d.x1, // Compartimento
+                    "y": d.length // Contagem
+                })
+            );
+            // console.log(dataSituacao)
+
+            return [dataMedia, dataTipos, dataSituacao, dataValor];
+        }
+
+        function generateVis(settings, data, mapData){
+
+            let d = generateData(data);
+            let dataMedia = d[0], dataTipos = d[1], dataSituacao = d[2], dataValor = d[3];
+
+            vis.map = loadMap(settings.map, mapData, dataMedia);
+            vis.barsTipos = loadBars(settings.tipos, dataTipos);
+            vis.barsSituacao = loadBars(settings.situacao, dataSituacao);
+            vis.barsValor = loadBars(settings.valor, dataValor);
+        }
+
+        function loadMap(cfg, geoData, data) {
+            
+            let svg = cfg.svg;
+
+            let color = d3.scaleLinear()
+                .range(["White", "DarkGreen"])
+                .domain(d3.extent(data, d => +d.value))
+
+            let color_acc = d => color(data.find(u => u.UF === d.properties["UF_05"])["value"]);
+
+            let projection = d3.geoMercator()
+                .fitExtent([[50,0], [cfg.width, cfg.height]], geoData)
+            
+            let translation = projection.translate();
+            projection = projection
+                .clipExtent([[0,0], [cfg.width - cfg.width/6, cfg.height]])
+
+            let path = d3.geoPath().projection(projection);
+
+            let map = svg.selectAll("path")
+                .data(geoData.features)
+                .join("path")
+                    .attr("d", path)
+                    .attr("fill", color_acc)
+                    .attr("stroke", "black")
+                    .attr("stroke-width", 1)
+                    .on("mousedown", function(e, d) {
+
+                        map.style("fill", color_acc);
+                        map.style("stroke-width", "1px")
+
+                        if (d.selected) {
+                            d.selected = false;
+                            map.filterColumn = "";
+                            d3.select(this).style("fill", color_acc)
+                        } else {
+                            map.data().forEach(d => d.selected = false);
+                            d.selected = true;
+                            map.filterColumn = cfg.column;
+                            d3.select(this).style("fill", "salmon")
+                            d3.select(this).style("stroke-width", "2px")
+                        }
+                        cfg.filter();
+                    });
+            map.append("title").text(d => `Estado: ${d.properties["UF_05"]}\n` +
+                                        "Média de duração: " + d3.format("~s")(data.find(u => u.UF === d.properties["UF_05"])["value"]))
+            map.filterColumn = "";
+            map.color_acc = color_acc;
+            map.color = d3.scaleLinear()
+                .range(["white", "DarkGreen"])
+                .domain([0,1])
+
+            
+            svg.append("image")
+                .attr("x", cfg.width - cfg.width/8 - 120/2)
+                .attr("y", 30)
+                .attr("width", 120)
+                .attr("height", 30)
+                .attr("xlink:href", ramp(map.color))
+                .style("outline", "1px solid black")
+            svg.append("text")
+                .attr("x", cfg.width - cfg.width/8 - 120/2)
+                .attr("y", 75)
+                .attr("width", 120)
+                .attr("height", 30)
+                .text(d3.format(".2f")(color.domain()[0]))
+            svg.append("text")
+                .attr("x", cfg.width - cfg.width*.07)
+                .attr("y", 75)
+                .attr("width", 120)
+                .attr("height", 30)
+                .text(d3.format(".2f")(color.domain()[1]))
+            svg.append("text")
+                .attr("x", cfg.width - cfg.width/8 - 120/2)
+                .attr("y", 20)
+                .attr("width", 120)
+                .attr("height", 30)
+                .text("Média da duração")
+            return map;
+        }
+
+        function loadBars(cfg, data) {
+            let svg = cfg.svg;
+
+            let x = {}, y = {};
+            let xAxis = {}, yAxis = {};
+
+            let bar = {};
+
+            if (cfg.orientation == "horizontal") {
+                y = d3.scaleBand()
+                    .domain(data.map(d => d.y))
+                    .range([cfg.margin.top, cfg.height - cfg.margin.bottom])
+                    .padding(0.1)
+
+                x = d3.scaleLinear()
+                    .domain([0, d3.max(data, d => d.x)]).nice()
+                    .range([cfg.margin.left, cfg.width - cfg.margin.right])
+
+                bar = svg
+                    .selectAll("rect")
+                    .data(data)
+                    .join(
+                        enter => enter.append("rect")
+                            .attr("x", d => cfg.margin.left)
+                            .attr("y", d => y(d.y))
+                            .attr("height", y.bandwidth())
+                            .attr("width", d => x(d.x) - x(0))
+                            .style("fill", "seagreen"),
+                        
+                        update => update,
+                        exit => exit.remove()
+                    )
+                
+                bar.append("title").text(d => d.y + ": " + d3.format("~s")(d.x));
+                
+                bar.updateVis = dataUpdate => {
+                    x = d3.scaleLinear()
+                        .domain([0, d3.max(dataUpdate, d => d.x)]).nice()
+                        .range([cfg.margin.left, cfg.width - cfg.margin.right])
+                    // console.log(x.domain())
+                    svg.selectAll("rect")
+                        .data(dataUpdate)
+                        .join(
+                            enter => enter.append("rect")
+                                .attr("x", d => cfg.margin.left)
+                                .attr("y", d => y(d.y))
+                                .attr("height", y.bandwidth())
+                                .attr("width", d => x(d.x) - x(0))
+                                .style("fill", "seagreen"),
+                            update => update
+                                .attr("x", d => cfg.margin.left)
+                                .attr("y", d => y(d.y))
+                                .attr("height", y.bandwidth())
+                                .attr("width", d => x(d.x) - x(0))
+                                .style("fill", "fill"),
+                            exit => exit.remove()
+                        )   
+                    bar.select("title").remove()
+                    bar.append("title").text(d => d.y + ": " + d3.format("~s")(d.x));
+
+                    xAxis = g => g.attr("transform", `translate(0,${cfg.height - cfg.margin.bottom})`)
+                        .call(d3.axisBottom(x).tickSizeOuter(0).tickFormat(a => d3.format("~s")(a)))
+
+                    svg.selectAll(".axis").remove();
+                    svg.append("g").classed("axis", true).call(xAxis);
+                    svg.append("g").classed("axis", true).call(yAxis);
+                }
+            } else {
+                x = d3.scaleBand()
+                    .domain(data.map(d => d.x))
+                    .range([cfg.margin.left, cfg.width - cfg.margin.right])
+                    .padding(0.1)
+
+                y = d3.scaleLinear()
+                    .domain([0, d3.max(data, d => d.y)]).nice()
+                    .range([cfg.height - cfg.margin.bottom, cfg.margin.top])
+
+                bar = svg
+                    .selectAll("rect")
+                    .data(data)
+                    .join(
+                        enter => enter.append("rect")
+                            .attr("x", d => x(d.x))
+                            .attr("y", d => y(d.y))
+                            .attr("height", d => y(0) - y(d.y))
+                            .attr("width", x.bandwidth())
+                            .style("fill", "seagreen"),
+                        update => update,
+                        exit => exit.remove()
+                    )
+                bar.updateVis = dataUpdate => {
+                    x = d3.scaleBand()
+                        .domain(dataUpdate.map(d => d.x))
+                        .range([cfg.margin.left, cfg.width - cfg.margin.right])
+                        .padding(0.1)
+
+                    y = d3.scaleLinear()
+                        .domain([0, d3.max(dataUpdate, d => d.y)]).nice()
+                        .range([cfg.height - cfg.margin.bottom, cfg.margin.top])
+
+                    svg.selectAll("rect")
+                        .data(dataUpdate)
+                        .join(
+                            enter => enter.append("rect")
+                                .attr("x", d => x(d.x))
+                                .attr("y", d => y(d.y))
+                                .attr("height", d => y(0) - y(d.y))
+                                .attr("width", x.bandwidth())
+                                .style("fill", "seagreen"),
+                            update => update
+                                .attr("x", d => x(d.x))
+                                .attr("y", d => y(d.y))
+                                .attr("height", d => y(0) - y(d.y))
+                                .attr("width", x.bandwidth())
+                                .style("fill", "seagreen"),
+                            exit => exit.remove()
+                        )
+                    bar.select("title").remove()
+                    bar.append("title").text(d => d3.format("~s")(d.x) + ": " +d.y);
+
+                    xAxis = g => g.attr("transform", `translate(0,${cfg.height - cfg.margin.bottom})`)
+                        .call(d3.axisBottom(x).tickSizeOuter(0).tickFormat(a => d3.format("~s")(a)))
+
+                    yAxis = g => g.attr("transform", `translate(${cfg.margin.left},0)`)
+                        .call(d3.axisLeft(y))
+                        .call(g => g.select(".domain").remove())
+                    
+                    svg.selectAll(".axis").remove()
+                    svg.append("g").classed("axis", true).call(xAxis);
+                    svg.append("g").classed("axis", true).call(yAxis);
+                }
+                bar.append("title").text(d => d3.format("~s")(d.x) + ": " +d.y);
+            }
+
+            xAxis = g => g.attr("transform", `translate(0,${cfg.height - cfg.margin.bottom})`)
+                .call(d3.axisBottom(x).tickSizeOuter(0).tickFormat(a => d3.format("~s")(a)))
+                // .call(g => g.select(".domain").remove())
+
+            yAxis = g => g.attr("transform", `translate(${cfg.margin.left},0)`)
+                .call(d3.axisLeft(y))
+                .call(g => g.select(".domain").remove())
+
+            svg.selectAll(".axis").remove()
+            svg.append("g").classed("axis", true).call(xAxis);
+            svg.append("g").classed("axis", true).call(yAxis);
+
+            if (cfg.filter) {
+
+                bar.on("mousedown", function(e, d) {
+
+                    bar.style("stroke", "");
+
+                    if (d.selected) {
+                        d.selected = false;
+                        bar.filterColumn = "";
+                        d3.select(this).style("stroke", "")
+                    } else {
+                        bar.data().forEach(d => d.selected = false);
+                        // console.log(bar.data())
+                        d.selected = true;
+                        bar.filterColumn = cfg.column;
+                        d3.select(this).style("stroke", "red")
+                        d3.select(this).style("stroke-width", "4px")
+                    }
+
+                    cfg.filter();
+                });
+            }
+
+            bar.filterColumn = "";
+            return bar;
+        }
+
+        // Baseado em de: https://observablehq.com/@mbostock/color-ramp
+        function ramp(color, n = 150) {
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext("2d");
+            canvas.style.width = "150px";
+            canvas.style.height = "10px";
+            canvas.width = 150;
+            canvas.height = 30;
+            canvas.style.border = "1px solid black"
+            canvas.style.imageRendering = "pixelated";
+            for (let i = 0; i < n; ++i) {
+                context.fillStyle = color(i / (n - 1));
+                context.fillRect(i, 0, 1, 30);
+            }
+            // document.body.appendChild(canvas);
+            return canvas.toDataURL();
+        }
+
     </script>
 </html>
